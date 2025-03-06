@@ -15,7 +15,8 @@ from app.database import (
     match_documents_in_db,
     add_document_to_db,
     close_db_pool,
-    delete_document_from_db
+    delete_document_from_db,
+    get_health_status
 )
 
 # Setup logging
