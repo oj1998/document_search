@@ -122,7 +122,7 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
         )
         
         # Prepare the SQL query with pgvector's cosine distance
-        # Lower cosine distance = more similar
+        # We're removing the collection_id filter since we're using the whole table
         sql = """
         SELECT 
             uuid, 
@@ -132,27 +132,25 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
             1 - (embedding <=> $1) as similarity
         FROM 
             langchain_pg_embedding
-        WHERE 
-            collection_id = $2
         """
         
         # Add metadata filter if provided
-        params = [query_embedding, COLLECTION_NAME]
+        params = [query_embedding]
         
         if request.metadata_filter:
             conditions = []
-            for i, (key, value) in enumerate(request.metadata_filter.items(), 3):
+            for i, (key, value) in enumerate(request.metadata_filter.items(), 2):
                 conditions.append(f"cmetadata->>{key} = ${i}")
                 params.append(str(value))
             
             if conditions:
-                sql += " AND " + " AND ".join(conditions)
+                sql += " WHERE " + " AND ".join(conditions)
         
         # Add order by and limit
         sql += """
         ORDER BY 
             embedding <=> $1
-        LIMIT $3
+        LIMIT $2
         """
         params.append(request.max_results * 2)  # Get more for filtering
         
@@ -216,6 +214,7 @@ async def add_document_to_db(document: DocumentInput) -> Dict[str, Any]:
         # Generate UUID if custom_id not provided
         doc_uuid = str(uuid.uuid4())
         custom_id = document.custom_id or None
+        collection_id = str(uuid.uuid4())  # Generate a unique collection_id
         
         # Insert into database
         async with pool.acquire() as conn:
@@ -226,7 +225,7 @@ async def add_document_to_db(document: DocumentInput) -> Dict[str, Any]:
                 ($1, $2, $3, $4, $5, $6)
             """, 
                 doc_uuid, 
-                COLLECTION_NAME,
+                collection_id,  # Each document gets its own collection_id
                 embedding,
                 document.content,
                 json.dumps(document.metadata),
@@ -243,50 +242,6 @@ async def add_document_to_db(document: DocumentInput) -> Dict[str, Any]:
         logger.error(f"Error adding document: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-async def add_documents_to_db(documents: List[DocumentInput]) -> Dict[str, Any]:
-    """Add multiple documents to the database"""
-    if not pool or not embeddings_model:
-        raise HTTPException(status_code=503, detail="Service not fully initialized")
-    
-    try:
-        # Generate all embeddings at once for efficiency
-        contents = [doc.content for doc in documents]
-        embeddings = await asyncio.get_event_loop().run_in_executor(
-            None, 
-            lambda: embeddings_model.embed_documents(contents)
-        )
-        
-        # Insert into database
-        async with pool.acquire() as conn:
-            # Start a transaction
-            async with conn.transaction():
-                for i, document in enumerate(documents):
-                    doc_uuid = str(uuid.uuid4())
-                    custom_id = document.custom_id or None
-                    
-                    await conn.execute("""
-                    INSERT INTO langchain_pg_embedding 
-                        (uuid, collection_id, embedding, document, cmetadata, custom_id)
-                    VALUES 
-                        ($1, $2, $3, $4, $5, $6)
-                    """, 
-                        doc_uuid, 
-                        COLLECTION_NAME,
-                        embeddings[i],
-                        document.content,
-                        json.dumps(document.metadata),
-                        custom_id
-                    )
-        
-        return {
-            "status": "success", 
-            "added_count": len(documents)
-        }
-        
-    except Exception as e:
-        logger.error(f"Error bulk adding documents: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
 async def delete_document_from_db(document_id: str, by_custom_id: bool = True) -> Dict[str, Any]:
     """Delete a document from the database"""
     if not pool:
@@ -297,14 +252,14 @@ async def delete_document_from_db(document_id: str, by_custom_id: bool = True) -
             if by_custom_id:
                 result = await conn.execute("""
                 DELETE FROM langchain_pg_embedding 
-                WHERE custom_id = $1 AND collection_id = $2
-                """, document_id, COLLECTION_NAME)
+                WHERE custom_id = $1
+                """, document_id)
             else:
                 # Assume it's a UUID
                 result = await conn.execute("""
                 DELETE FROM langchain_pg_embedding 
-                WHERE uuid = $1 AND collection_id = $2
-                """, document_id, COLLECTION_NAME)
+                WHERE uuid = $1
+                """, document_id)
         
         # Parse the DELETE result (e.g., "DELETE 1")
         rows_deleted = int(result.split()[1]) if result else 0
