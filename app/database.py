@@ -40,7 +40,8 @@ async def initialize_db_pool():
     pool = await asyncpg.create_pool(
         CONNECTION_STRING,
         min_size=3,
-        max_size=10
+        max_size=10,
+        statement_cache_size=0  # Add this line to disable prepared statements cache
     )
     logger.info("Database pool created successfully")
     
