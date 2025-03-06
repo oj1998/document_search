@@ -14,7 +14,7 @@ from app.database import (
     initialize_embeddings_model,
     match_documents_in_db,
     add_document_to_db,
-    add_documents_to_db,
+    close_db_pool,
     delete_document_from_db
 )
 
@@ -71,7 +71,15 @@ async def add_document(document: DocumentInput):
 @app.post("/bulk-add-documents")
 async def bulk_add_documents(documents: list[DocumentInput]):
     """Add multiple documents to the database with embeddings"""
-    return await add_documents_to_db(documents)
+    results = []
+    for document in documents:
+        result = await add_document_to_db(document)
+        results.append(result)
+    
+    return {
+        "status": "success",
+        "added_count": len(documents)
+    }
 
 @app.delete("/document/{document_id}")
 async def delete_document(document_id: str, by_custom_id: bool = True):
