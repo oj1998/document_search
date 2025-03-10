@@ -19,7 +19,8 @@ from app.database import (
     add_document_to_db,
     close_db_pool,
     delete_document_from_db,
-    get_health_status
+    get_health_status,
+    find_document_by_content
 )
 
 # Setup logging
