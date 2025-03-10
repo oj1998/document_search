@@ -175,7 +175,7 @@ async def get_health_status() -> HealthResponse:
         )
 
 async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
-    """Match documents in the database"""
+    """Match documents in the database using direct SQL"""
     if not pool or not embeddings_model:
         raise HTTPException(status_code=503, detail="Service not fully initialized")
     
@@ -191,70 +191,48 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
         # Validate the embedding
         if not validate_embedding(query_embedding):
             logger.error(f"Invalid embedding generated for query: {request.query}")
-            logger.error(f"Embedding type: {type(query_embedding)}, value: {query_embedding}")
-            
-            # Try to fix the embedding if possible
-            if isinstance(query_embedding, (list, np.ndarray)) and len(query_embedding) == 0:
-                # This is an empty embedding, which is a problem
-                raise HTTPException(status_code=500, detail="Empty embedding generated for query")
-            
-            # If it's not a list, try to convert it
-            if not isinstance(query_embedding, list):
-                try:
-                    query_embedding = list(query_embedding)
-                    logger.info(f"Converted embedding to list with {len(query_embedding)} dimensions")
-                except:
-                    raise HTTPException(status_code=500, detail="Could not convert embedding to valid format")
-            
-            # Final check
-            if not validate_embedding(query_embedding):
-                raise HTTPException(status_code=500, detail="Failed to generate valid embedding for query")
+            raise HTTPException(status_code=500, detail="Failed to generate valid embedding for query")
 
         logger.info(f"Generated valid embedding with {len(query_embedding)} dimensions")
         
-        # Execute the query
+        # Convert embedding to a string representation for direct SQL
+        embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+        
+        # Construct a direct SQL query string
+        sql = f"""
+        SELECT 
+            uuid, 
+            custom_id,
+            document, 
+            cmetadata, 
+            1 - (embedding <=> '{embedding_str}'::vector) as similarity
+        FROM 
+            langchain_pg_embedding
+        """
+        
+        # Add metadata filter if provided
+        where_clauses = []
+        if request.metadata_filter:
+            for key, value in request.metadata_filter.items():
+                # Escape the value to prevent SQL injection
+                escaped_value = str(value).replace("'", "''")
+                where_clauses.append(f"cmetadata->>'{ key }' = '{ escaped_value }'")
+        
+        if where_clauses:
+            sql += " WHERE " + " AND ".join(where_clauses)
+        
+        # Add order by and limit
+        sql += f"""
+        ORDER BY 
+            embedding <=> '{embedding_str}'::vector
+        LIMIT {request.max_results * 2}
+        """
+        
+        # Execute the query as direct SQL
         async with pool.acquire() as conn:
-            # Make sure vector type is registered with this connection
-            await register_vector_type(conn)
-            
-            # Build the base query
-            base_sql = """
-            SELECT 
-                uuid, 
-                custom_id,
-                document, 
-                cmetadata, 
-                1 - (embedding <=> $1) as similarity
-            FROM 
-                langchain_pg_embedding
-            """
-            
-            # Add metadata filter if provided
-            where_clauses = []
-            filter_params = []
-            
-            if request.metadata_filter:
-                for key, value in request.metadata_filter.items():
-                    where_clauses.append(f"cmetadata->>'{key}' = ${len(filter_params) + 2}")
-                    filter_params.append(str(value))
-            
-            if where_clauses:
-                base_sql += " WHERE " + " AND ".join(where_clauses)
-            
-            # Add order by and limit
-            base_sql += f"""
-            ORDER BY 
-                embedding <=> $1
-            LIMIT ${len(filter_params) + 2}
-            """
-            
-            # Add the limit parameter
-            filter_params.append(request.max_results * 2)
-            
-            # Execute the query
-            logger.debug(f"Executing query: {base_sql} with params: [<embedding>, {filter_params}]")
-            rows = await conn.fetch(base_sql, query_embedding, *filter_params)
-            logger.debug(f"Query returned {len(rows)} rows")
+            logger.info(f"Executing direct SQL query")
+            rows = await conn.fetch(sql)
+            logger.info(f"Query returned {len(rows)} rows")
         
         # Process results
         matches = []
