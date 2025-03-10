@@ -5,8 +5,6 @@ import logging
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 
-
-
 from app.models import (
     QueryRequest, 
     QueryResponse, 
@@ -74,7 +72,21 @@ async def health_check():
 @app.post("/match-documents", response_model=QueryResponse)
 async def match_documents(request: QueryRequest):
     """Match documents based on description query"""
-    return await match_documents_in_db(request)
+    # Log the original request parameters first
+    logger.info(f"ORIGINAL request - Query: '{request.query}'")
+    logger.info(f"ORIGINAL request - Min confidence: {request.min_confidence}")
+    logger.info(f"ORIGINAL request - Metadata filter: {request.metadata_filter}")
+    logger.info(f"ORIGINAL request - Max results: {request.max_results}")
+    
+    # Use the original request to see what happens with normal settings
+    result = await match_documents_in_db(request)
+    
+    # Log the original results
+    logger.info(f"ORIGINAL request - Found {len(result.matches)} matches")
+    logger.info(f"ORIGINAL request - Total candidates: {result.total_candidates}")
+    
+    # Return the normal results
+    return result
 
 @app.post("/add-document")
 async def add_document(document: DocumentInput):
