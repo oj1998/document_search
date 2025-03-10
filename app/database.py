@@ -182,6 +182,12 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
     start_time = datetime.utcnow()
     
     try:
+        # DEBUGGING: Log query parameters
+        logger.info(f"Query: '{request.query}'")
+        logger.info(f"Metadata filter: {request.metadata_filter}")
+        logger.info(f"Min confidence: {request.min_confidence}")
+        logger.info(f"Max results: {request.max_results}")
+        
         # Generate embedding for the query
         query_embedding = await asyncio.get_event_loop().run_in_executor(
             None, 
@@ -228,14 +234,23 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
         LIMIT {request.max_results * 2}
         """
         
+        # DEBUGGING: Log the SQL query
+        logger.info(f"Raw SQL query: {sql}")
+        
         # Execute the query as direct SQL
         async with pool.acquire() as conn:
             logger.info(f"Executing direct SQL query")
             rows = await conn.fetch(sql)
-            logger.info(f"Query returned {len(rows)} rows")
+            logger.info(f"Query returned {len(rows)} rows before confidence filtering")
+        
+        # DEBUGGING: Log raw results for the first few rows
+        if rows and len(rows) > 0:
+            for i, row in enumerate(rows[:3]):  # Log first 3 rows
+                logger.info(f"Row {i}: id={row['custom_id'] or row['uuid']}, similarity={row['similarity']}")
         
         # Process results
         matches = []
+        filtered_count = 0
         for row in rows:
             # Convert row to dict - using actual column names from the query
             document_id = row['custom_id'] or str(row['uuid'])
@@ -246,6 +261,7 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
             
             # Skip if below threshold
             if confidence < request.min_confidence:
+                filtered_count += 1
                 continue
                 
             # Get content snippet - using the actual column name 'document' instead of 'content'
@@ -259,8 +275,14 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
                 metadata=metadata
             ))
         
+        # DEBUGGING: Log filtering results
+        logger.info(f"Documents filtered out by confidence threshold: {filtered_count}")
+        
         # Sort by confidence and limit to max_results
         matches = sorted(matches, key=lambda x: x.confidence, reverse=True)[:request.max_results]
+        
+        # DEBUGGING: Log final matches
+        logger.info(f"Final matches returned: {len(matches)}")
         
         # Calculate query time
         query_time_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
@@ -274,24 +296,6 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
     except Exception as e:
         logger.error(f"Error matching documents: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
-logger.info(f"Query: '{request.query}'")
-logger.info(f"Metadata filter: {request.metadata_filter}")
-logger.info(f"Min confidence: {request.min_confidence}")
-logger.info(f"Max results: {request.max_results}")
-
-# After executing the SQL query
-logger.info(f"Raw SQL query: {sql}")
-logger.info(f"Query returned {len(rows)} rows before confidence filtering")
-
-# After filtering by confidence
-logger.info(f"Documents filtered out by confidence threshold: {len(rows) - len(matches)}")
-logger.info(f"Final matches returned: {len(matches)}")
-
-# Debug info for the first few raw results if available
-if rows and len(rows) > 0:
-    for i, row in enumerate(rows[:3]):  # Log first 3 rows
-        logger.info(f"Row {i}: id={row['custom_id'] or row['uuid']}, similarity={row['similarity']}")
 
 async def add_document_to_db(document: DocumentInput) -> Dict[str, Any]:
     """Add a document to the database"""
@@ -375,7 +379,6 @@ async def delete_document_from_db(document_id: str, by_custom_id: bool = True) -
         logger.error(f"Error deleting document: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# Add this function to database.py
 async def find_document_by_content(content_snippet: str, limit: int = 5):
     """Find documents containing specific text content"""
     if not pool:
