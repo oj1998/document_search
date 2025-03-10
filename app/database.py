@@ -212,45 +212,49 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
 
         logger.info(f"Generated valid embedding with {len(query_embedding)} dimensions")
         
-        # Prepare the SQL query with pgvector's cosine distance
-        sql = """
-        SELECT 
-            uuid, 
-            custom_id,
-            document, 
-            cmetadata, 
-            1 - (embedding <=> $1) as similarity
-        FROM 
-            langchain_pg_embedding
-        """
-        
-        # Add metadata filter if provided
-        params = [query_embedding]
-        
-        if request.metadata_filter:
-            conditions = []
-            for i, (key, value) in enumerate(request.metadata_filter.items(), 2):
-                conditions.append(f"cmetadata->>{key} = ${i}")
-                params.append(str(value))
-            
-            if conditions:
-                sql += " WHERE " + " AND ".join(conditions)
-        
-        # Add order by and limit
-        sql += """
-        ORDER BY 
-            embedding <=> $1
-        LIMIT $2
-        """
-        params.append(request.max_results * 2)  # Get more for filtering
-        
         # Execute the query
         async with pool.acquire() as conn:
             # Make sure vector type is registered with this connection
             await register_vector_type(conn)
             
-            # Execute the query with the parameters
-            rows = await conn.fetch(sql, *params)
+            # Build the base query
+            base_sql = """
+            SELECT 
+                uuid, 
+                custom_id,
+                document, 
+                cmetadata, 
+                1 - (embedding <=> $1) as similarity
+            FROM 
+                langchain_pg_embedding
+            """
+            
+            # Add metadata filter if provided
+            where_clauses = []
+            filter_params = []
+            
+            if request.metadata_filter:
+                for key, value in request.metadata_filter.items():
+                    where_clauses.append(f"cmetadata->>'{key}' = ${len(filter_params) + 2}")
+                    filter_params.append(str(value))
+            
+            if where_clauses:
+                base_sql += " WHERE " + " AND ".join(where_clauses)
+            
+            # Add order by and limit
+            base_sql += f"""
+            ORDER BY 
+                embedding <=> $1
+            LIMIT ${len(filter_params) + 2}
+            """
+            
+            # Add the limit parameter
+            filter_params.append(request.max_results * 2)
+            
+            # Execute the query
+            logger.debug(f"Executing query: {base_sql} with params: [<embedding>, {filter_params}]")
+            rows = await conn.fetch(base_sql, query_embedding, *filter_params)
+            logger.debug(f"Query returned {len(rows)} rows")
         
         # Process results
         matches = []
