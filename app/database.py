@@ -100,8 +100,13 @@ def initialize_embeddings_model():
         raise ValueError("OPENAI_API_KEY environment variable is required")
     
     logger.info("Initializing OpenAI embeddings model...")
-    embeddings_model = OpenAIEmbeddings()
-    logger.info("Embeddings model initialized successfully")
+    # Specify dimensions to ensure compatibility with pgvector
+    # text-embedding-3-small has 1536 dimensions
+    embeddings_model = OpenAIEmbeddings(
+        model="text-embedding-3-small",  # This model has 1536 dimensions, well below pgvector's limit
+        dimensions=1536  # Explicitly set dimensions
+    )
+    logger.info(f"Embeddings model initialized successfully with dimensions=1536")
 
 async def close_db_pool():
     """Close the database connection pool"""
