@@ -123,13 +123,13 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
         )
         
         # Prepare the SQL query with pgvector's cosine distance
-        # We're removing the collection_id filter since we're using the whole table
+        # Note: Using explicit column names to avoid confusion
         sql = """
         SELECT 
             uuid, 
             custom_id,
-            document as content,
-            cmetadata as metadata,
+            document, 
+            cmetadata, 
             1 - (embedding <=> $1) as similarity
         FROM 
             langchain_pg_embedding
@@ -162,9 +162,9 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
         # Process results
         matches = []
         for row in rows:
-            # Convert row to dict
+            # Convert row to dict - using actual column names from the query
             document_id = row['custom_id'] or str(row['uuid'])
-            metadata = row['metadata'] if row['metadata'] else {}
+            metadata = row['cmetadata'] if row['cmetadata'] else {}
             
             # Calculate confidence (similarity score)
             confidence = float(row['similarity'])
@@ -173,8 +173,8 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
             if confidence < request.min_confidence:
                 continue
                 
-            # Get content snippet
-            content = row['content']
+            # Get content snippet - using the actual column name 'document' instead of 'content'
+            content = row['document']
             snippet = content[:200] + "..." if len(content) > 200 else content
             
             matches.append(DocumentMatch(
