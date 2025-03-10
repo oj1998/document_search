@@ -31,18 +31,40 @@ embeddings_model: Optional[OpenAIEmbeddings] = None
 CONNECTION_STRING = os.getenv('POSTGRES_CONNECTION_STRING')
 COLLECTION_NAME = os.getenv('COLLECTION_NAME', 'document_collection')
 
+def validate_embedding(embedding):
+    """Validate that an embedding is properly formatted for pgvector"""
+    if not embedding:
+        return False
+        
+    if not isinstance(embedding, list):
+        return False
+        
+    if len(embedding) == 0:
+        return False
+        
+    # Check that all elements are numbers
+    if not all(isinstance(x, (int, float)) for x in embedding):
+        return False
+        
+    return True
+
 async def register_vector_type(conn: Connection):
     """Register the vector type with asyncpg"""
     await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
     
     # Define the vector type
     # This tells asyncpg how to convert between Python and PostgreSQL
-    await conn.set_type_codec(
-        'vector',
-        encoder=lambda vector: np.array(vector, dtype=np.float32).tobytes(),
-        decoder=lambda data: np.frombuffer(data, dtype=np.float32).tolist(),
-        format='binary'
-    )
+    try:
+        await conn.set_type_codec(
+            'vector',
+            encoder=lambda vector: np.array(vector, dtype=np.float32).tobytes(),
+            decoder=lambda data: np.frombuffer(data, dtype=np.float32).tolist(),
+            format='binary'
+        )
+        logger.debug("Vector type codec registered successfully")
+    except Exception as e:
+        logger.error(f"Error registering vector type codec: {str(e)}")
+        raise
 
 async def prepare_database():
     """Prepare the database by registering custom types and creating tables if needed"""
@@ -100,13 +122,22 @@ def initialize_embeddings_model():
         raise ValueError("OPENAI_API_KEY environment variable is required")
     
     logger.info("Initializing OpenAI embeddings model...")
-    # Specify dimensions to ensure compatibility with pgvector
-    # text-embedding-3-small has 1536 dimensions
-    embeddings_model = OpenAIEmbeddings(
-        model="text-embedding-3-small",  # This model has 1536 dimensions, well below pgvector's limit
-        dimensions=1536  # Explicitly set dimensions
-    )
-    logger.info(f"Embeddings model initialized successfully with dimensions=1536")
+    try:
+        # Specify dimensions to ensure compatibility with pgvector
+        # text-embedding-3-small has 1536 dimensions
+        embeddings_model = OpenAIEmbeddings(
+            model="text-embedding-3-small",  # This model has 1536 dimensions, well below pgvector's limit
+            dimensions=1536  # Explicitly set dimensions
+        )
+        
+        # Test the embeddings model
+        test_embedding = embeddings_model.embed_query("This is a test query")
+        logger.info(f"Test embedding generated successfully with {len(test_embedding)} dimensions")
+        
+        logger.info(f"Embeddings model initialized successfully with dimensions=1536")
+    except Exception as e:
+        logger.error(f"Failed to initialize embeddings model: {str(e)}")
+        raise
 
 async def close_db_pool():
     """Close the database connection pool"""
@@ -156,6 +187,30 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
             None, 
             lambda: embeddings_model.embed_query(request.query)
         )
+        
+        # Validate the embedding
+        if not validate_embedding(query_embedding):
+            logger.error(f"Invalid embedding generated for query: {request.query}")
+            logger.error(f"Embedding type: {type(query_embedding)}, value: {query_embedding}")
+            
+            # Try to fix the embedding if possible
+            if isinstance(query_embedding, (list, np.ndarray)) and len(query_embedding) == 0:
+                # This is an empty embedding, which is a problem
+                raise HTTPException(status_code=500, detail="Empty embedding generated for query")
+            
+            # If it's not a list, try to convert it
+            if not isinstance(query_embedding, list):
+                try:
+                    query_embedding = list(query_embedding)
+                    logger.info(f"Converted embedding to list with {len(query_embedding)} dimensions")
+                except:
+                    raise HTTPException(status_code=500, detail="Could not convert embedding to valid format")
+            
+            # Final check
+            if not validate_embedding(query_embedding):
+                raise HTTPException(status_code=500, detail="Failed to generate valid embedding for query")
+
+        logger.info(f"Generated valid embedding with {len(query_embedding)} dimensions")
         
         # Prepare the SQL query with pgvector's cosine distance
         sql = """
@@ -249,6 +304,11 @@ async def add_document_to_db(document: DocumentInput) -> Dict[str, Any]:
             None, 
             lambda: embeddings_model.embed_documents([document.content])[0]
         )
+        
+        # Validate the embedding
+        if not validate_embedding(embedding):
+            logger.error(f"Invalid embedding generated for document")
+            raise HTTPException(status_code=500, detail="Failed to generate valid embedding for document")
         
         # Generate UUID if custom_id not provided
         doc_uuid = str(uuid.uuid4())
