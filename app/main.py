@@ -97,3 +97,22 @@ async def bulk_add_documents(documents: list[DocumentInput]):
 async def delete_document(document_id: str, by_custom_id: bool = True):
     """Delete a document by ID"""
     return await delete_document_from_db(document_id, by_custom_id)
+
+@app.get("/debug/find-document")
+async def find_document(content: str, limit: int = 5):
+    """Debug endpoint to find documents by content"""
+    return await find_document_by_content(content, limit)
+
+@app.post("/debug/match-low-threshold")
+async def match_documents_low_threshold(request: QueryRequest):
+    """Match documents with a very low confidence threshold for debugging"""
+    # Create a copy of the request with a very low confidence threshold
+    debug_request = QueryRequest(
+        query=request.query,
+        max_results=20,  # Return more results for debugging
+        min_confidence=0.01,  # Very low threshold
+        metadata_filter=None  # Remove any metadata filters
+    )
+    
+    logger.info(f"Running debug match with low threshold for query: {debug_request.query}")
+    return await match_documents_in_db(debug_request)
