@@ -130,7 +130,7 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
             custom_id,
             document, 
             cmetadata, 
-            1 - (embedding <=> $1) as similarity
+            1 - (embedding <=> $1::vector) as similarity
         FROM 
             langchain_pg_embedding
         """
@@ -150,14 +150,22 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
         # Add order by and limit
         sql += """
         ORDER BY 
-            embedding <=> $1
+            embedding <=> $1::vector
         LIMIT $2
         """
         params.append(request.max_results * 2)  # Get more for filtering
         
         # Execute the query
         async with pool.acquire() as conn:
-            rows = await conn.fetch(sql, *params)
+            # Register vector type with asyncpg if necessary
+            # This tells asyncpg how to handle the vector data type
+            try:
+                await conn.execute("SELECT NULL::vector")
+            except asyncpg.exceptions.UndefinedObjectError:
+                # Vector type not registered, register it now
+                await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            
+            rows = await conn.fetch(sql, params[0], params[-1])
         
         # Process results
         matches = []
