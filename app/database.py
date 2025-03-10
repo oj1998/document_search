@@ -275,6 +275,24 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
         logger.error(f"Error matching documents: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+logger.info(f"Query: '{request.query}'")
+logger.info(f"Metadata filter: {request.metadata_filter}")
+logger.info(f"Min confidence: {request.min_confidence}")
+logger.info(f"Max results: {request.max_results}")
+
+# After executing the SQL query
+logger.info(f"Raw SQL query: {sql}")
+logger.info(f"Query returned {len(rows)} rows before confidence filtering")
+
+# After filtering by confidence
+logger.info(f"Documents filtered out by confidence threshold: {len(rows) - len(matches)}")
+logger.info(f"Final matches returned: {len(matches)}")
+
+# Debug info for the first few raw results if available
+if rows and len(rows) > 0:
+    for i, row in enumerate(rows[:3]):  # Log first 3 rows
+        logger.info(f"Row {i}: id={row['custom_id'] or row['uuid']}, similarity={row['similarity']}")
+
 async def add_document_to_db(document: DocumentInput) -> Dict[str, Any]:
     """Add a document to the database"""
     if not pool or not embeddings_model:
@@ -356,3 +374,40 @@ async def delete_document_from_db(document_id: str, by_custom_id: bool = True) -
     except Exception as e:
         logger.error(f"Error deleting document: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# Add this function to database.py
+async def find_document_by_content(content_snippet: str, limit: int = 5):
+    """Find documents containing specific text content"""
+    if not pool:
+        raise ValueError("Database pool not initialized")
+    
+    try:
+        async with pool.acquire() as conn:
+            # Search for documents containing the content snippet
+            rows = await conn.fetch("""
+            SELECT uuid, custom_id, document, cmetadata
+            FROM langchain_pg_embedding
+            WHERE document ILIKE $1
+            LIMIT $2
+            """, f"%{content_snippet}%", limit)
+            
+            results = []
+            for row in rows:
+                doc_id = row['custom_id'] or str(row['uuid'])
+                content = row['document']
+                snippet = content[:100] + "..." if len(content) > 100 else content
+                
+                results.append({
+                    "document_id": doc_id,
+                    "content_snippet": snippet,
+                    "metadata": row['cmetadata'] if row['cmetadata'] else {}
+                })
+            
+            return {
+                "found": len(results) > 0,
+                "count": len(results),
+                "documents": results
+            }
+    except Exception as e:
+        logger.error(f"Error finding document by content: {str(e)}")
+        raise
