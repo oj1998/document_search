@@ -6,7 +6,9 @@ import logging
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
+import numpy as np
 import asyncpg
+from asyncpg import Connection
 from fastapi import HTTPException
 from langchain_openai import OpenAIEmbeddings
 
@@ -28,6 +30,30 @@ embeddings_model: Optional[OpenAIEmbeddings] = None
 # Get environment variables
 CONNECTION_STRING = os.getenv('POSTGRES_CONNECTION_STRING')
 COLLECTION_NAME = os.getenv('COLLECTION_NAME', 'document_collection')
+
+async def register_vector_type(conn: Connection):
+    """Register the vector type with asyncpg"""
+    await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    
+    # Define the vector type
+    # This tells asyncpg how to convert between Python and PostgreSQL
+    await conn.set_type_codec(
+        'vector',
+        encoder=lambda vector: np.array(vector, dtype=np.float32).tobytes(),
+        decoder=lambda data: np.frombuffer(data, dtype=np.float32).tolist(),
+        format='binary'
+    )
+
+async def prepare_database():
+    """Prepare the database by registering custom types and creating tables if needed"""
+    global pool
+    
+    if not pool:
+        raise ValueError("Database pool must be initialized first")
+    
+    async with pool.acquire() as conn:
+        # Register the vector type with asyncpg
+        await register_vector_type(conn)
 
 async def initialize_db_pool():
     """Initialize the database connection pool"""
@@ -61,6 +87,10 @@ async def initialize_db_pool():
             raise Exception("Required table does not exist")
             
         logger.info("Database setup verified")
+    
+    # Register vector type with the pool
+    await prepare_database()
+    logger.info("Vector type registered with database")
 
 def initialize_embeddings_model():
     """Initialize the OpenAI embeddings model"""
@@ -123,14 +153,13 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
         )
         
         # Prepare the SQL query with pgvector's cosine distance
-        # Note: Using explicit column names to avoid confusion
         sql = """
         SELECT 
             uuid, 
             custom_id,
             document, 
             cmetadata, 
-            1 - (embedding <=> $1::vector) as similarity
+            1 - (embedding <=> $1) as similarity
         FROM 
             langchain_pg_embedding
         """
@@ -150,22 +179,18 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
         # Add order by and limit
         sql += """
         ORDER BY 
-            embedding <=> $1::vector
+            embedding <=> $1
         LIMIT $2
         """
         params.append(request.max_results * 2)  # Get more for filtering
         
         # Execute the query
         async with pool.acquire() as conn:
-            # Register vector type with asyncpg if necessary
-            # This tells asyncpg how to handle the vector data type
-            try:
-                await conn.execute("SELECT NULL::vector")
-            except asyncpg.exceptions.UndefinedObjectError:
-                # Vector type not registered, register it now
-                await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            # Make sure vector type is registered with this connection
+            await register_vector_type(conn)
             
-            rows = await conn.fetch(sql, params[0], params[-1])
+            # Execute the query with the parameters
+            rows = await conn.fetch(sql, *params)
         
         # Process results
         matches = []
@@ -227,6 +252,9 @@ async def add_document_to_db(document: DocumentInput) -> Dict[str, Any]:
         
         # Insert into database
         async with pool.acquire() as conn:
+            # Make sure vector type is registered with this connection
+            await register_vector_type(conn)
+            
             await conn.execute("""
             INSERT INTO langchain_pg_embedding 
                 (uuid, collection_id, embedding, document, cmetadata, custom_id)
