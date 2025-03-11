@@ -204,8 +204,8 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
         # Convert embedding to a string representation for direct SQL
         embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
         
-        # Construct a direct SQL query string
-        # Use cosine distance (<==>) for both SELECT and ORDER BY
+        # Construct a direct SQL query
+        # Using 1-cosine_distance as the absolute similarity measure (0-1 range)
         sql = f"""
         SELECT 
             uuid, 
@@ -225,14 +225,18 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
                 escaped_value = str(value).replace("'", "''")
                 where_clauses.append(f"cmetadata->>'{ key }' = '{ escaped_value }'")
         
+        # Add a where clause to pre-filter by similarity threshold
+        # This ensures we only process documents that meet our threshold
+        where_clauses.append(f"(1 - (embedding <=> '{embedding_str}'::vector)) >= {request.min_confidence}")
+        
         if where_clauses:
             sql += " WHERE " + " AND ".join(where_clauses)
         
-        # Add order by and limit - use cosine distance for ordering
-        # Lower cosine distance means more similar, so ASC order
+        # Add order by and limit
+        # Since higher similarity (closer to 1) is better, use DESC order
         sql += f"""
         ORDER BY 
-            embedding <=> '{embedding_str}'::vector ASC
+            similarity DESC
         LIMIT {request.max_results * 2}
         """
         
@@ -243,7 +247,7 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
         async with pool.acquire() as conn:
             logger.info(f"Executing direct SQL query")
             rows = await conn.fetch(sql)
-            logger.info(f"Query returned {len(rows)} rows before confidence filtering")
+            logger.info(f"Query returned {len(rows)} rows")
         
         # DEBUGGING: Log raw results for the first few rows
         if rows and len(rows) > 0:
@@ -252,20 +256,14 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
         
         # Process results
         matches = []
-        filtered_count = 0
         for row in rows:
-            # Convert row to dict - using actual column names from the query
+            # Convert row to dict
             document_id = row['custom_id'] or str(row['uuid'])
             metadata = row['cmetadata'] if row['cmetadata'] else {}
             
-            # Get similarity value - now in range 0 to 1 where higher is more similar
+            # Get similarity value (now in range 0 to 1)
             confidence = float(row['similarity'])
             
-            # Skip if below threshold
-            if confidence < request.min_confidence:
-                filtered_count += 1
-                continue
-                
             # Get content snippet
             content = row['document']
             snippet = content[:200] + "..." if len(content) > 200 else content
@@ -277,10 +275,7 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
                 metadata=metadata
             ))
         
-        # DEBUGGING: Log filtering results
-        logger.info(f"Documents filtered out by confidence threshold: {filtered_count}")
-        
-        # Sort by confidence and limit to max_results
+        # Sort by confidence and limit to max_results (though should already be sorted)
         matches = sorted(matches, key=lambda x: x.confidence, reverse=True)[:request.max_results]
         
         # DEBUGGING: Log final matches
