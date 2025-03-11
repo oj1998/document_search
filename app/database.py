@@ -205,13 +205,14 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
         embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
         
         # Construct a direct SQL query string
+        # In database.py, replace this line in your SQL query
         sql = f"""
         SELECT 
             uuid, 
             custom_id,
             document, 
             cmetadata, 
-            1 - (embedding <=> '{embedding_str}'::vector) as similarity
+            embedding <#> '{embedding_str}'::vector as similarity
         FROM 
             langchain_pg_embedding
         """
