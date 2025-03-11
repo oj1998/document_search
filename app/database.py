@@ -205,14 +205,14 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
         embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
         
         # Construct a direct SQL query string
-        # In database.py, replace this line in your SQL query
+        # Use cosine distance (<==>) for both SELECT and ORDER BY
         sql = f"""
         SELECT 
             uuid, 
             custom_id,
             document, 
             cmetadata, 
-            embedding <#> '{embedding_str}'::vector as similarity
+            (1 - (embedding <=> '{embedding_str}'::vector)) as similarity
         FROM 
             langchain_pg_embedding
         """
@@ -228,10 +228,11 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
         if where_clauses:
             sql += " WHERE " + " AND ".join(where_clauses)
         
-        # Add order by and limit
+        # Add order by and limit - use cosine distance for ordering
+        # Lower cosine distance means more similar, so ASC order
         sql += f"""
         ORDER BY 
-            embedding <=> '{embedding_str}'::vector
+            embedding <=> '{embedding_str}'::vector ASC
         LIMIT {request.max_results * 2}
         """
         
@@ -257,7 +258,7 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
             document_id = row['custom_id'] or str(row['uuid'])
             metadata = row['cmetadata'] if row['cmetadata'] else {}
             
-            # Calculate confidence (similarity score)
+            # Get similarity value - now in range 0 to 1 where higher is more similar
             confidence = float(row['similarity'])
             
             # Skip if below threshold
@@ -265,7 +266,7 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
                 filtered_count += 1
                 continue
                 
-            # Get content snippet - using the actual column name 'document' instead of 'content'
+            # Get content snippet
             content = row['document']
             snippet = content[:200] + "..." if len(content) > 200 else content
             
