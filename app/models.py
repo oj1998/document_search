@@ -11,7 +11,7 @@ class DocumentMatch(BaseModel):
 class QueryRequest(BaseModel):
     query: str
     max_results: int = 5
-    min_confidence: float = 0.05
+    min_confidence: float = 0.03
     metadata_filter: Optional[Dict[str, Any]] = None
 
 class QueryResponse(BaseModel):
