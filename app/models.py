@@ -4,8 +4,12 @@ from datetime import datetime
 
 class DocumentMatch(BaseModel):
     document_id: str
-    content_snippet: str
+    document_name: str  # Add this field
+    folder: str  # Add this field
+    last_updated: str  # Add this field
     confidence: float
+    # You can keep or remove content_snippet depending on whether you still want it
+    content_snippet: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 class QueryRequest(BaseModel):
