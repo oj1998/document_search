@@ -10,6 +10,7 @@ langchain-openai>=0.0.2
 pgvector>=0.2.0
 asyncpg>=0.27.0
 psycopg[binary]>=3.1.12
+langchain-community>=0.0.1
 
 # OpenAI dependencies
 openai>=1.0.0
