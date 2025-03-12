@@ -217,23 +217,24 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
             langchain_pg_embedding
         """
         
-        # Add metadata filter if provided
+        # Add where clauses
         where_clauses = []
+        
+        # Add metadata filter if provided
         if request.metadata_filter:
             for key, value in request.metadata_filter.items():
                 # Escape the value to prevent SQL injection
                 escaped_value = str(value).replace("'", "''")
                 where_clauses.append(f"cmetadata->>'{ key }' = '{ escaped_value }'")
         
-        # Add a where clause to pre-filter by similarity threshold
-        # This ensures we only process documents that meet our threshold
+        # Add similarity threshold filter
         where_clauses.append(f"(1 - (embedding <=> '{embedding_str}'::vector)) >= {request.min_confidence}")
         
+        # Append WHERE clause if there are any conditions
         if where_clauses:
             sql += " WHERE " + " AND ".join(where_clauses)
         
         # Add order by and limit
-        # Since higher similarity (closer to 1) is better, use DESC order
         sql += f"""
         ORDER BY 
             similarity DESC
