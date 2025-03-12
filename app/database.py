@@ -165,7 +165,7 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
             )
             retriever = ContextualCompressionRetriever(
                 base_retriever=retriever,
-                doc_compressor=embeddings_filter
+                base_compressor=embeddings_filter  # Changed from doc_compressor to base_compressor
             )
         
         # Using run_in_executor because LangChain's retriever is not async
