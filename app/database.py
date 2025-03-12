@@ -65,10 +65,21 @@ def initialize_vector_store():
     try:
         logger.info(f"Initializing PGVector with collection name: {COLLECTION_NAME}")
         
-        # Use sync initialization since LangChain's PGVector doesn't have async initialization
-        vector_store = PGVector(
-            connection_string=CONNECTION_STRING,
-            embedding_function=embeddings_model,
+        # Check the format of CONNECTION_STRING
+        # Ensure it's in the right format: postgresql+psycopg://user:pass@host:port/dbname
+        # If it starts with postgresql:// we need to convert it
+        conn_string = CONNECTION_STRING
+        if conn_string.startswith('postgresql://'):
+            # Replace postgresql:// with postgresql+psycopg://
+            conn_string = conn_string.replace('postgresql://', 'postgresql+psycopg://')
+            logger.info(f"Converted connection string format for compatibility")
+            
+        # Use the current PGVector initialization syntax
+        from langchain_postgres import PGVector
+        
+        vector_store = PGVector.from_connection_string(
+            connection_string=conn_string,
+            embedding=embeddings_model,
             collection_name=COLLECTION_NAME,
             use_jsonb=True  # Use JSONB for metadata storage
         )
