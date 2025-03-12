@@ -83,10 +83,10 @@ def initialize_vector_store():
         # Updated PGVector initialization based on newer API
         # For Supabase specifically
         vector_store = PGVector(
-            connection_string=conn_string,
-            embedding_function=embeddings_model,
+            connection=conn_string,
+            embedding=embeddings_model,
             collection_name=COLLECTION_NAME,
-            use_jsonb=True  # Use JSONB for metadata storage
+            use_jsonb=True
         )
         
         logger.info("Vector store initialized successfully")
