@@ -204,50 +204,61 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
         # Convert embedding to a string representation for direct SQL
         embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
         
-        # Construct a direct SQL query
-        # Using 1-cosine_distance as the absolute similarity measure (0-1 range)
-        sql = f"""
+        # -------------------------------------------------------------------------------
+        # The key issue is in the SQL query. Let's reconstruct it from scratch.
+        # -------------------------------------------------------------------------------
+        
+        # First, build the base query without any WHERE clause
+        sql = """
         SELECT 
             uuid, 
-            custom_id,
+            custom_id, 
             document, 
             cmetadata, 
-            (1 - (embedding <=> '{embedding_str}'::vector)) as similarity
+            1 - (embedding <=> $1::vector) as similarity
         FROM 
             langchain_pg_embedding
         """
         
-        # Add where clauses
+        # Start building parameters list with the embedding
+        params = [embedding_str]
+        param_idx = 2  # Start from $2 for additional parameters
+        
+        # Build WHERE clauses
         where_clauses = []
         
-        # Add metadata filter if provided
+        # Add the similarity threshold as a WHERE clause
+        where_clauses.append(f"1 - (embedding <=> $1::vector) >= ${param_idx}")
+        params.append(request.min_confidence)
+        param_idx += 1
+        
+        # Add metadata filters
         if request.metadata_filter:
             for key, value in request.metadata_filter.items():
-                # Escape the value to prevent SQL injection
-                escaped_value = str(value).replace("'", "''")
-                where_clauses.append(f"cmetadata->>'{ key }' = '{ escaped_value }'")
+                # Use parameterized queries to prevent SQL injection
+                where_clauses.append(f"cmetadata->>'{key}' = ${param_idx}")
+                params.append(str(value))
+                param_idx += 1
         
-        # Add similarity threshold filter
-        where_clauses.append(f"(1 - (embedding <=> '{embedding_str}'::vector)) >= {request.min_confidence}")
-        
-        # Append WHERE clause if there are any conditions
+        # Add WHERE clause if there are any conditions
         if where_clauses:
             sql += " WHERE " + " AND ".join(where_clauses)
         
-        # Add order by and limit
+        # Add ORDER BY and LIMIT
         sql += f"""
-        ORDER BY 
-            similarity DESC
-        LIMIT {request.max_results * 2}
+        ORDER BY similarity DESC
+        LIMIT ${param_idx}
         """
+        params.append(request.max_results * 2)
         
         # DEBUGGING: Log the SQL query
-        logger.info(f"Raw SQL query: {sql}")
+        logger.info(f"Raw SQL query with params: {sql}")
+        logger.info(f"Params: {params}")
         
-        # Execute the query as direct SQL
+        # Execute the query as direct SQL with parameters
         async with pool.acquire() as conn:
-            logger.info(f"Executing direct SQL query")
-            rows = await conn.fetch(sql)
+            logger.info(f"Executing parameterized SQL query")
+            rows = await conn.fetch(sql, *params)
             logger.info(f"Query returned {len(rows)} rows")
         
         # DEBUGGING: Log raw results for the first few rows
@@ -262,7 +273,7 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
             document_id = row['custom_id'] or str(row['uuid'])
             metadata = row['cmetadata'] if row['cmetadata'] else {}
             
-            # Get similarity value (now in range 0 to 1)
+            # Get similarity value
             confidence = float(row['similarity'])
             
             # Get content snippet
@@ -276,7 +287,7 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
                 metadata=metadata
             ))
         
-        # Sort by confidence and limit to max_results (though should already be sorted)
+        # Sort by confidence and limit to max_results
         matches = sorted(matches, key=lambda x: x.confidence, reverse=True)[:request.max_results]
         
         # DEBUGGING: Log final matches
