@@ -18,6 +18,8 @@ class QueryResponse(BaseModel):
     matches: List[DocumentMatch]
     query_time_ms: float
     total_candidates: int
+    suggested_documents: List[str] = Field(default_factory=list)
+    suggested_folders: List[str] = Field(default_factory=list)
 
 class DocumentInput(BaseModel):
     content: str
