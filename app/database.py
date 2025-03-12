@@ -74,11 +74,12 @@ def initialize_vector_store():
             conn_string = conn_string.replace('postgresql://', 'postgresql+psycopg://')
             logger.info(f"Converted connection string format for compatibility")
         
-        # Initialize PGVector - keeping this compatible with your first app
+        # Initialize PGVector with the correct parameter names for this version
         vector_store = PGVector(
+            embeddings=embeddings_model,    # Use embeddings NOT embedding_function
             collection_name=COLLECTION_NAME,
-            connection_string=conn_string,  # Use connection_string instead of connection
-            embedding_function=embeddings_model  # Use embedding_function instead of embeddings
+            connection=conn_string,         # Use connection NOT connection_string
+            use_jsonb=True
         )
         
         logger.info("Vector store initialized successfully")
