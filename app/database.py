@@ -201,43 +201,47 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
 
         logger.info(f"Generated valid embedding with {len(query_embedding)} dimensions")
         
-        # -------------------------------------------------------------------------------
-        # Execute the query using asyncpg's prepared statements
-        # -------------------------------------------------------------------------------
+        # Convert embedding to a string representation for direct SQL
+        embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
         
+        # Construct a direct SQL query string
+        sql = f"""
+        SELECT 
+            uuid, 
+            custom_id,
+            document, 
+            cmetadata, 
+            1 - (embedding <=> '{embedding_str}'::vector) as similarity
+        FROM 
+            langchain_pg_embedding
+        """
+        
+        # Add metadata filter if provided
+        where_clauses = []
+        if request.metadata_filter:
+            for key, value in request.metadata_filter.items():
+                # Escape the value to prevent SQL injection
+                escaped_value = str(value).replace("'", "''")
+                where_clauses.append(f"cmetadata->>'{ key }' = '{ escaped_value }'")
+        
+        if where_clauses:
+            sql += " WHERE " + " AND ".join(where_clauses)
+        
+        # Add order by and limit
+        sql += f"""
+        ORDER BY 
+            embedding <=> '{embedding_str}'::vector
+        LIMIT {request.max_results * 2}
+        """
+        
+        # DEBUGGING: Log the SQL query
+        logger.info(f"Raw SQL query: {sql}")
+        
+        # Execute the query as direct SQL
         async with pool.acquire() as conn:
-            # Make sure vector type is registered with this connection
-            await register_vector_type(conn)
-            
-            # Create a SQL query using vector cosine distance
-            sql = """
-            SELECT 
-                uuid, 
-                custom_id, 
-                document, 
-                cmetadata, 
-                1 - (embedding <=> $1) as similarity
-            FROM 
-                langchain_pg_embedding
-            WHERE 
-                1 - (embedding <=> $1) >= $2
-            ORDER BY 
-                similarity DESC
-            LIMIT $3
-            """
-            
-            # Log what we're about to execute
-            logger.info("Executing parameterized SQL query")
-            
-            # Execute the query with our parameters - importantly, we're passing the embedding directly
-            rows = await conn.fetch(
-                sql, 
-                query_embedding,  # pgvector/asyncpg should handle this correctly
-                request.min_confidence,
-                request.max_results
-            )
-            
-            logger.info(f"Query returned {len(rows)} rows")
+            logger.info(f"Executing direct SQL query")
+            rows = await conn.fetch(sql)
+            logger.info(f"Query returned {len(rows)} rows before confidence filtering")
         
         # DEBUGGING: Log raw results for the first few rows
         if rows and len(rows) > 0:
@@ -246,15 +250,21 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
         
         # Process results
         matches = []
+        filtered_count = 0
         for row in rows:
-            # Convert row to dict
+            # Convert row to dict - using actual column names from the query
             document_id = row['custom_id'] or str(row['uuid'])
             metadata = row['cmetadata'] if row['cmetadata'] else {}
             
-            # Get similarity value
+            # Calculate confidence (similarity score)
             confidence = float(row['similarity'])
             
-            # Get content snippet
+            # Skip if below threshold
+            if confidence < request.min_confidence:
+                filtered_count += 1
+                continue
+                
+            # Get content snippet - using the actual column name 'document' instead of 'content'
             content = row['document']
             snippet = content[:200] + "..." if len(content) > 200 else content
             
@@ -264,6 +274,9 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
                 confidence=round(confidence, 4),
                 metadata=metadata
             ))
+        
+        # DEBUGGING: Log filtering results
+        logger.info(f"Documents filtered out by confidence threshold: {filtered_count}")
         
         # Sort by confidence and limit to max_results
         matches = sorted(matches, key=lambda x: x.confidence, reverse=True)[:request.max_results]
