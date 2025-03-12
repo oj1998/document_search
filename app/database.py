@@ -8,7 +8,7 @@ from typing import Optional, List, Dict, Any
 
 from fastapi import HTTPException
 from langchain_openai import OpenAIEmbeddings
-from langchain_postgres import PGVector  # Make sure to import from langchain_postgres
+from langchain_community.vectorstores.pgvector import PGVector
 from langchain.schema.document import Document
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import EmbeddingsFilter
@@ -31,7 +31,7 @@ vector_store: Optional[PGVector] = None
 # Get environment variables
 CONNECTION_STRING = os.getenv('POSTGRES_CONNECTION_STRING')
 # Use the same collection name as in your first app
-COLLECTION_NAME = os.getenv('COLLECTION_NAME', 'document_embeddings')
+COLLECTION_NAME = "document_embeddings"
 
 def initialize_embeddings_model():
     """Initialize the OpenAI embeddings model"""
@@ -42,10 +42,7 @@ def initialize_embeddings_model():
     
     logger.info("Initializing OpenAI embeddings model...")
     try:
-        embeddings_model = OpenAIEmbeddings(
-            model="text-embedding-3-small",
-            dimensions=1536
-        )
+        embeddings_model = OpenAIEmbeddings()
         
         logger.info("Embeddings model initialized successfully")
         return True
@@ -68,18 +65,12 @@ def initialize_vector_store():
         
         # Check the format of CONNECTION_STRING
         # Ensure it's in the right format for psycopg
-        conn_string = CONNECTION_STRING
-        if conn_string.startswith('postgresql://'):
-            # Replace postgresql:// with postgresql+psycopg://
-            conn_string = conn_string.replace('postgresql://', 'postgresql+psycopg://')
-            logger.info(f"Converted connection string format for compatibility")
         
         # Initialize PGVector with the correct parameter names for this version
         vector_store = PGVector(
-            embeddings=embeddings_model,    # Use embeddings NOT embedding_function
+            embedding_function=embeddings_model,    
             collection_name=COLLECTION_NAME,
-            connection=conn_string,         # Use connection NOT connection_string
-            use_jsonb=True
+            connection_string=CONNECTION_STRING,    
         )
         
         logger.info("Vector store initialized successfully")
