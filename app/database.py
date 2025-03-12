@@ -189,6 +189,9 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
             
             matches.append(DocumentMatch(
                 document_id=str(document_id),
+                document_name=metadata.get('title', metadata.get('filename', 'Unnamed Document')),
+                folder=metadata.get('folder', 'Uncategorized'),
+                last_updated=metadata.get('last_modified', metadata.get('upload_date', '')),
                 content_snippet=snippet,
                 confidence=round(float(confidence), 4),
                 metadata=metadata
@@ -232,6 +235,12 @@ async def add_document_to_db(document: DocumentInput) -> Dict[str, Any]:
         # Add custom_id to metadata if provided
         if document.custom_id:
             doc.metadata['custom_id'] = document.custom_id
+        if document.metadata.get('title') is None:
+            doc.metadata['title'] = document.metadata.get('filename', 'Unnamed Document')
+        if document.metadata.get('folder') is None:
+            doc.metadata['folder'] = document.metadata.get('folder', 'Uncategorized')
+        if document.metadata.get('last_modified') is None:
+            doc.metadata['last_modified'] = datetime.utcnow().isoformat()
         
         # Add the document to the vector store (run in executor since it's synchronous)
         doc_ids = await asyncio.get_event_loop().run_in_executor(
