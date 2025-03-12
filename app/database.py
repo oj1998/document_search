@@ -201,34 +201,32 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
 
         logger.info(f"Generated valid embedding with {len(query_embedding)} dimensions")
         
-        # Convert embedding to a string representation for direct SQL
-        embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
-        
         # -------------------------------------------------------------------------------
-        # The key issue is in the SQL query. Let's reconstruct it from scratch.
-        # -------------------------------------------------------------------------------
-        
         # First, build the base query without any WHERE clause
+        # -------------------------------------------------------------------------------
+        
         sql = """
         SELECT 
             uuid, 
             custom_id, 
             document, 
             cmetadata, 
-            1 - (embedding <=> $1::vector) as similarity
+            1 - (embedding <=> $1) as similarity
         FROM 
             langchain_pg_embedding
         """
         
         # Start building parameters list with the embedding
-        params = [embedding_str]
+        # Convert Python list to numpy array, which asyncpg will handle correctly
+        embedding_array = np.array(query_embedding, dtype=np.float32)
+        params = [embedding_array]
         param_idx = 2  # Start from $2 for additional parameters
         
         # Build WHERE clauses
         where_clauses = []
         
         # Add the similarity threshold as a WHERE clause
-        where_clauses.append(f"1 - (embedding <=> $1::vector) >= ${param_idx}")
+        where_clauses.append(f"1 - (embedding <=> $1) >= ${param_idx}")
         params.append(request.min_confidence)
         param_idx += 1
         
@@ -249,14 +247,16 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
         ORDER BY similarity DESC
         LIMIT ${param_idx}
         """
-        params.append(request.max_results * 2)
+        params.append(request.max_results)
         
         # DEBUGGING: Log the SQL query
-        logger.info(f"Raw SQL query with params: {sql}")
-        logger.info(f"Params: {params}")
+        logger.info(f"Executing SQL query with {len(params)} parameters")
         
         # Execute the query as direct SQL with parameters
         async with pool.acquire() as conn:
+            # Make sure vector type is registered with this connection
+            await register_vector_type(conn)
+            
             logger.info(f"Executing parameterized SQL query")
             rows = await conn.fetch(sql, *params)
             logger.info(f"Query returned {len(rows)} rows")
