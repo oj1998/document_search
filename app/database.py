@@ -66,15 +66,22 @@ def initialize_vector_store():
         logger.info(f"Initializing PGVector with collection name: {COLLECTION_NAME}")
         
         # Check the format of CONNECTION_STRING
-        # Ensure it's in the right format: postgresql+psycopg://user:pass@host:port/dbname
-        # If it starts with postgresql:// we need to convert it
+        # Ensure it's in the right format for psycopg
         conn_string = CONNECTION_STRING
         if conn_string.startswith('postgresql://'):
             # Replace postgresql:// with postgresql+psycopg://
             conn_string = conn_string.replace('postgresql://', 'postgresql+psycopg://')
             logger.info(f"Converted connection string format for compatibility")
-            
+        
+        # For Supabase, we need to import the specific PGVector class
+        from langchain_postgres import PGVector
+        
+        # Connection details from connection string
+        import urllib.parse
+        parsed = urllib.parse.urlparse(conn_string)
+        
         # Updated PGVector initialization based on newer API
+        # For Supabase specifically
         vector_store = PGVector(
             connection_string=conn_string,
             embedding_function=embeddings_model,
