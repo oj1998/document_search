@@ -83,9 +83,9 @@ def initialize_vector_store():
         # Updated PGVector initialization based on newer API
         # For Supabase specifically
         vector_store = PGVector(
-            connection=conn_string,
-            embedding=embeddings_model,
+            embeddings=embeddings_model,  # Use "embeddings" not "embedding"
             collection_name=COLLECTION_NAME,
+            connection=conn_string,
             use_jsonb=True
         )
         
