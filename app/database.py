@@ -202,63 +202,41 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
         logger.info(f"Generated valid embedding with {len(query_embedding)} dimensions")
         
         # -------------------------------------------------------------------------------
-        # First, build the base query without any WHERE clause
+        # Execute the query using asyncpg's prepared statements
         # -------------------------------------------------------------------------------
         
-        sql = """
-        SELECT 
-            uuid, 
-            custom_id, 
-            document, 
-            cmetadata, 
-            1 - (embedding <=> $1) as similarity
-        FROM 
-            langchain_pg_embedding
-        """
-        
-        # Start building parameters list with the embedding
-        # Convert Python list to numpy array, which asyncpg will handle correctly
-        embedding_array = np.array(query_embedding, dtype=np.float32)
-        params = [embedding_array]
-        param_idx = 2  # Start from $2 for additional parameters
-        
-        # Build WHERE clauses
-        where_clauses = []
-        
-        # Add the similarity threshold as a WHERE clause
-        where_clauses.append(f"1 - (embedding <=> $1) >= ${param_idx}")
-        params.append(request.min_confidence)
-        param_idx += 1
-        
-        # Add metadata filters
-        if request.metadata_filter:
-            for key, value in request.metadata_filter.items():
-                # Use parameterized queries to prevent SQL injection
-                where_clauses.append(f"cmetadata->>'{key}' = ${param_idx}")
-                params.append(str(value))
-                param_idx += 1
-        
-        # Add WHERE clause if there are any conditions
-        if where_clauses:
-            sql += " WHERE " + " AND ".join(where_clauses)
-        
-        # Add ORDER BY and LIMIT
-        sql += f"""
-        ORDER BY similarity DESC
-        LIMIT ${param_idx}
-        """
-        params.append(request.max_results)
-        
-        # DEBUGGING: Log the SQL query
-        logger.info(f"Executing SQL query with {len(params)} parameters")
-        
-        # Execute the query as direct SQL with parameters
         async with pool.acquire() as conn:
             # Make sure vector type is registered with this connection
             await register_vector_type(conn)
             
-            logger.info(f"Executing parameterized SQL query")
-            rows = await conn.fetch(sql, *params)
+            # Create a SQL query using vector cosine distance
+            sql = """
+            SELECT 
+                uuid, 
+                custom_id, 
+                document, 
+                cmetadata, 
+                1 - (embedding <=> $1) as similarity
+            FROM 
+                langchain_pg_embedding
+            WHERE 
+                1 - (embedding <=> $1) >= $2
+            ORDER BY 
+                similarity DESC
+            LIMIT $3
+            """
+            
+            # Log what we're about to execute
+            logger.info("Executing parameterized SQL query")
+            
+            # Execute the query with our parameters - importantly, we're passing the embedding directly
+            rows = await conn.fetch(
+                sql, 
+                query_embedding,  # pgvector/asyncpg should handle this correctly
+                request.min_confidence,
+                request.max_results
+            )
+            
             logger.info(f"Query returned {len(rows)} rows")
         
         # DEBUGGING: Log raw results for the first few rows
