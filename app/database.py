@@ -8,7 +8,7 @@ from typing import Optional, List, Dict, Any
 
 from fastapi import HTTPException
 from langchain_openai import OpenAIEmbeddings
-from langchain_postgres import PGVector
+from langchain_postgres import PGVector  # Make sure to import from langchain_postgres
 from langchain.schema.document import Document
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import EmbeddingsFilter
@@ -30,7 +30,8 @@ vector_store: Optional[PGVector] = None
 
 # Get environment variables
 CONNECTION_STRING = os.getenv('POSTGRES_CONNECTION_STRING')
-COLLECTION_NAME = os.getenv('COLLECTION_NAME', 'document_collection')
+# Use the same collection name as in your first app
+COLLECTION_NAME = os.getenv('COLLECTION_NAME', 'document_embeddings')
 
 def initialize_embeddings_model():
     """Initialize the OpenAI embeddings model"""
@@ -73,20 +74,11 @@ def initialize_vector_store():
             conn_string = conn_string.replace('postgresql://', 'postgresql+psycopg://')
             logger.info(f"Converted connection string format for compatibility")
         
-        # For Supabase, we need to import the specific PGVector class
-        from langchain_postgres import PGVector
-        
-        # Connection details from connection string
-        import urllib.parse
-        parsed = urllib.parse.urlparse(conn_string)
-        
-        # Updated PGVector initialization based on newer API
-        # For Supabase specifically
+        # Initialize PGVector - keeping this compatible with your first app
         vector_store = PGVector(
-            embeddings=embeddings_model,  # Use "embeddings" not "embedding"
             collection_name=COLLECTION_NAME,
-            connection=conn_string,
-            use_jsonb=True
+            connection_string=conn_string,  # Use connection_string instead of connection
+            embedding_function=embeddings_model  # Use embedding_function instead of embeddings
         )
         
         logger.info("Vector store initialized successfully")
@@ -165,7 +157,7 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
             )
             retriever = ContextualCompressionRetriever(
                 base_retriever=retriever,
-                base_compressor=embeddings_filter  # Changed from doc_compressor to base_compressor
+                base_compressor=embeddings_filter
             )
         
         # Using run_in_executor because LangChain's retriever is not async
@@ -178,7 +170,6 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
         
         # Convert LangChain documents to our DocumentMatch format
         matches = []
-        suggested_folders = set()
         
         for doc in docs:
             # Skip if we don't have the necessary info
@@ -193,13 +184,7 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
                 # Use UUID if available
                 document_id = metadata.get('uuid', f"doc_{len(matches)}")
             
-            # Extract folder information if available
-            folder = metadata.get('folder')
-            if folder:
-                suggested_folders.add(folder)
-            
             # Extract or calculate confidence score
-            # LangChain 0.603+ provides relevance_score in metadata
             confidence = metadata.get('relevance_score', 0.95)
             
             # Skip if below confidence threshold
@@ -230,7 +215,6 @@ async def match_documents_in_db(request: QueryRequest) -> QueryResponse:
             matches=matches,
             query_time_ms=round(query_time_ms, 2),
             total_candidates=len(docs),
-            suggested_folders=list(suggested_folders),
             suggested_documents=suggested_docs
         )
         
