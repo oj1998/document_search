@@ -74,12 +74,10 @@ def initialize_vector_store():
             conn_string = conn_string.replace('postgresql://', 'postgresql+psycopg://')
             logger.info(f"Converted connection string format for compatibility")
             
-        # Use the current PGVector initialization syntax
-        from langchain_postgres import PGVector
-        
-        vector_store = PGVector.from_connection_string(
+        # Updated PGVector initialization based on newer API
+        vector_store = PGVector(
             connection_string=conn_string,
-            embedding=embeddings_model,
+            embedding_function=embeddings_model,
             collection_name=COLLECTION_NAME,
             use_jsonb=True  # Use JSONB for metadata storage
         )
