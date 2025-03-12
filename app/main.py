@@ -1,3 +1,5 @@
+# main.py
+
 from fastapi import FastAPI, HTTPException
 from contextlib import asynccontextmanager
 import os
@@ -11,14 +13,12 @@ from app.models import (
     DocumentInput
 )
 from app.database import (
-    initialize_db_pool,
     initialize_embeddings_model,
+    initialize_vector_store,
     match_documents_in_db,
     add_document_to_db,
-    close_db_pool,
     delete_document_from_db,
-    get_health_status,
-    find_document_by_content
+    get_health_status
 )
 
 # Setup logging
@@ -34,10 +34,11 @@ load_dotenv()
 # Startup and shutdown events manager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize database and embeddings model
+    # Initialize embeddings model and vector store
     try:
-        await initialize_db_pool()
+        logger.info("Initializing application components...")
         initialize_embeddings_model()
+        initialize_vector_store()
         logger.info("Application initialized successfully")
     except Exception as e:
         logger.error(f"Startup error: {str(e)}")
@@ -45,8 +46,8 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    # Cleanup on shutdown
-    await close_db_pool()
+    # No specific cleanup needed since PGVector doesn't have a close method
+    logger.info("Application shutting down")
 
 # Initialize FastAPI
 app = FastAPI(
@@ -72,20 +73,17 @@ async def health_check():
 @app.post("/match-documents", response_model=QueryResponse)
 async def match_documents(request: QueryRequest):
     """Match documents based on description query"""
-    # Log the original request parameters first
-    logger.info(f"ORIGINAL request - Query: '{request.query}'")
-    logger.info(f"ORIGINAL request - Min confidence: {request.min_confidence}")
-    logger.info(f"ORIGINAL request - Metadata filter: {request.metadata_filter}")
-    logger.info(f"ORIGINAL request - Max results: {request.max_results}")
+    # Log the request parameters
+    logger.info(f"Match request - Query: '{request.query}'")
+    logger.info(f"Match request - Min confidence: {request.min_confidence}")
+    logger.info(f"Match request - Max results: {request.max_results}")
     
-    # Use the original request to see what happens with normal settings
+    # Use LangChain-based document matching
     result = await match_documents_in_db(request)
     
-    # Log the original results
-    logger.info(f"ORIGINAL request - Found {len(result.matches)} matches")
-    logger.info(f"ORIGINAL request - Total candidates: {result.total_candidates}")
+    # Log the results
+    logger.info(f"Match results - Found {len(result.matches)} matches")
     
-    # Return the normal results
     return result
 
 @app.post("/add-document")
@@ -103,7 +101,8 @@ async def bulk_add_documents(documents: list[DocumentInput]):
     
     return {
         "status": "success",
-        "added_count": len(documents)
+        "added_count": len(documents),
+        "documents": results
     }
 
 @app.delete("/document/{document_id}")
@@ -111,21 +110,16 @@ async def delete_document(document_id: str, by_custom_id: bool = True):
     """Delete a document by ID"""
     return await delete_document_from_db(document_id, by_custom_id)
 
-@app.get("/debug/find-document")
-async def find_document(content: str, limit: int = 5):
-    """Debug endpoint to find documents by content"""
-    return await find_document_by_content(content, limit)
-
 @app.post("/debug/match-low-threshold")
 async def match_documents_low_threshold(request: QueryRequest):
     """Match documents with a very low confidence threshold for debugging"""
-    # Create a copy of the request with a very low confidence threshold
+    # Create a copy of the request with a lower confidence threshold
     debug_request = QueryRequest(
         query=request.query,
         max_results=20,  # Return more results for debugging
         min_confidence=0.01,  # Very low threshold
-        metadata_filter=None  # Remove any metadata filters
+        metadata_filter=request.metadata_filter  # Keep original filters
     )
     
-    logger.info(f"Running debug match with low threshold for query: {debug_request.query}")
+    logger.info(f"Debug match with low threshold for query: {debug_request.query}")
     return await match_documents_in_db(debug_request)
